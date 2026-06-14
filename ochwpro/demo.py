@@ -9,12 +9,20 @@
 """
 
 import argparse
+import json
+import time
+from datetime import datetime
 from pathlib import Path
 
 import torch
 import numpy as np
 
 from .dataset import strokes_to_sequence
+
+
+# ── 日志目录 ──────────────────────────────────────────────
+LOG_DIR = Path('logs/demo')
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load_model(model_path: str | Path):
@@ -74,8 +82,27 @@ def load_model(model_path: str | Path):
     return model, chars
 
 
+def is_cjk(ch: str) -> bool:
+    """判断是否为 CJK 统一表意文字（汉字）。"""
+    cp = ord(ch)
+    return (
+        (0x4E00 <= cp <= 0x9FFF) or      # 基本区
+        (0x3400 <= cp <= 0x4DBF) or      # 扩展 A
+        (0x20000 <= cp <= 0x2A6DF) or     # 扩展 B
+        (0x2A700 <= cp <= 0x2B73F) or     # 扩展 C
+        (0x2B740 <= cp <= 0x2B81F) or     # 扩展 D
+        (0x2B820 <= cp <= 0x2CEAF) or     # 扩展 E
+        (0xF900 <= cp <= 0xFAFF) or       # 兼容汉字
+        (0x2F800 <= cp <= 0x2FA1F)        # 兼容扩展
+    )
+
+
 def predict(model, chars, strokes, top_k: int = 10):
-    """直接用笔画轨迹预测汉字 — 无图像渲染."""
+    """直接用笔画轨迹预测汉字 — 无图像渲染.
+
+    返回结果会过滤掉非汉字字符（如标点、字母、符号），
+    确保候选列表只显示汉字。
+    """
     # 笔画轨迹 -> 特征序列
     seq = strokes_to_sequence(strokes)  # (T, 5)
     seq_tensor = torch.from_numpy(seq).float().unsqueeze(0)  # (1, T, 5)
@@ -84,10 +111,30 @@ def predict(model, chars, strokes, top_k: int = 10):
     with torch.no_grad():
         logits = model(seq_tensor, mask)
         probs = torch.softmax(logits, dim=1).squeeze(0)
-        top_probs, top_indices = torch.topk(probs, min(top_k, len(chars)))
+        # 取更多候选，确保过滤后还有足够的汉字
+        top_probs, top_indices = torch.topk(probs, min(top_k * 5, len(chars)))
 
-    results = [(chars[idx], prob.item()) for prob, idx in zip(top_probs, top_indices)]
-    return results
+    results = []
+    for prob, idx in zip(top_probs, top_indices):
+        ch = chars[idx]
+        if is_cjk(ch):
+            results.append((ch, prob.item()))
+            if len(results) >= top_k:
+                break
+
+    # 如果过滤后不足 top_k，补上最高分的（防止全是非汉字的极端情况）
+    if len(results) < top_k:
+        top_probs, top_indices = torch.topk(probs, min(top_k, len(chars)))
+        seen = {ch for ch, _ in results}
+        for prob, idx in zip(top_probs, top_indices):
+            ch = chars[idx]
+            if ch not in seen:
+                results.append((ch, prob.item()))
+                seen.add(ch)
+                if len(results) >= top_k:
+                    break
+
+    return results[:top_k]
 
 
 class HandwritingApp:
@@ -217,6 +264,21 @@ class HandwritingApp:
         self.status_var.set(f"笔画: {len(self.strokes)} | 轨迹点: {total_points} | "
                             f"序列长度: {sum(len(s) for s in self.strokes)}")
 
+        # 记录日志
+        self._save_log(results)
+
+    def _save_log(self, results):
+        """将当前笔画和预测结果保存到日志文件."""
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        log_entry = {
+            'timestamp': timestamp,
+            'strokes': [[list(pt) for pt in stroke] for stroke in self.strokes],
+            'predictions': [{'char': ch, 'prob': round(prob, 4)} for ch, prob in results],
+        }
+        log_path = LOG_DIR / f'stroke_{timestamp}.json'
+        with open(log_path, 'w', encoding='utf-8') as f:
+            json.dump(log_entry, f, ensure_ascii=False, indent=2)
+
     def _select_candidate(self, idx: int):
         if hasattr(self, '_candidates') and idx < len(self._candidates):
             ch, prob = self._candidates[idx]
@@ -259,21 +321,66 @@ class HandwritingApp:
         self.root.mainloop()
 
 
+def replay_log(log_path: str | Path, model_path: str | Path = 'checkpoints/last.ckpt'):
+    """回放日志文件中的笔画，用模型重新预测。
+
+    用法:
+      uv run python -m ochwpro.demo --replay logs/demo/stroke_20250615_123456.json
+    """
+    log_path = Path(log_path)
+    if not log_path.exists():
+        print(f"错误: 日志文件不存在: {log_path}")
+        return
+
+    with open(log_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    print(f"回放: {log_path.name}")
+    print(f"时间: {data['timestamp']}")
+    print(f"笔画: {len(data['strokes'])} 笔, "
+          f"轨迹点: {sum(len(s) for s in data['strokes'])}")
+
+    # 加载模型
+    model, chars = load_model(model_path)
+
+    # 预测
+    strokes = [[tuple(pt) for pt in stroke] for stroke in data['strokes']]
+    results = predict(model, chars, strokes, top_k=10)
+
+    print('\n预测结果:')
+    for i, (ch, prob) in enumerate(results):
+        mark = ' ★' if data['predictions'] and ch == data['predictions'][0]['char'] else ''
+        print(f'  {i+1}. {ch} ({prob:.2%}){mark}')
+
+    # 对比原结果
+    print('\n原始结果:')
+    for i, p in enumerate(data['predictions'][:10]):
+        print(f'  {i+1}. {p["char"]} ({p["prob"]:.2%})')
+
+
 def main():
     parser = argparse.ArgumentParser(description='手写汉字输入演示 (StrokeTransformer)')
-    parser.add_argument('--model', type=str, default='checkpoints/ochwpro-final.pt')
+    parser.add_argument('--model', type=str, default='checkpoints/last.ckpt')
+    parser.add_argument('--replay', type=str, default=None,
+                        help='回放日志文件中的笔画进行预测')
     args = parser.parse_args()
 
     model_path = Path(args.model)
     if not model_path.exists():
         print(f"错误: 模型文件不存在: {model_path}")
-        print("请先运行: python -m ochwpro.train")
         return
 
+    # ── 回放模式 ──
+    if args.replay:
+        replay_log(args.replay, model_path)
+        return
+
+    # ── GUI 模式 ──
     print(f"加载模型: {model_path}")
     model, chars = load_model(model_path)
     print(f"字符集: {len(chars)} 个 | "
           f"参数量: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"日志目录: {LOG_DIR}/")
 
     app = HandwritingApp(model, chars)
     app.run()
