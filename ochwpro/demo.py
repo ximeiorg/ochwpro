@@ -97,12 +97,31 @@ def is_cjk(ch: str) -> bool:
     )
 
 
+def _simplify_strokes(strokes, max_points_per_stroke=8):
+    """下采样笔画点，匹配 CASIA 数据的点密度（每字 ~8-24 点）."""
+    simplified = []
+    for stroke in strokes:
+        n = len(stroke)
+        if n <= max_points_per_stroke:
+            simplified.append(stroke)
+            continue
+        # 均匀取点，保留首尾
+        step = (n - 1) / (max_points_per_stroke - 1)
+        indices = [int(round(i * step)) for i in range(max_points_per_stroke)]
+        indices[-1] = n - 1  # 确保包含最后一个点
+        simplified.append([stroke[i] for i in indices])
+    return simplified
+
+
 def predict(model, chars, strokes, top_k: int = 10):
     """直接用笔画轨迹预测汉字 — 无图像渲染.
 
     返回结果会过滤掉非汉字字符（如标点、字母、符号），
     确保候选列表只显示汉字。
     """
+    # 下采样点密度，匹配 CASIA 训练数据分布
+    strokes = _simplify_strokes(strokes)
+
     # 笔画轨迹 -> 特征序列
     seq = strokes_to_sequence(strokes)  # (T, 5)
     seq_tensor = torch.from_numpy(seq).float().unsqueeze(0)  # (1, T, 5)

@@ -94,8 +94,48 @@ def _read_one_sample_strokes(pot_path: str, byte_offset: int) -> list[list[tuple
     return strokes
 
 
-def strokes_to_sequence(strokes: list[list[tuple[int, int]]]) -> np.ndarray:
-    """将笔画数据转为 (seq_len, 5) 特征序列: [x, y, dx, dy, pen_down]."""
+def _downsample_strokes(
+    strokes: list[list[tuple[int, int]]],
+    target_ratio: float,
+) -> list[list[tuple[int, int]]]:
+    """随机下采样笔画点，降低点密度.
+
+    CASIA 数据点稀疏（每字 8-24 点），画布/鼠标输入点密集（50+ 点），
+    训练时随机下采样让模型适应不同采样密度。
+    """
+    result = []
+    for stroke in strokes:
+        n = len(stroke)
+        if n <= 2:
+            result.append(stroke)
+            continue
+        keep = max(2, int(n * target_ratio))
+        indices = sorted(
+            [0, n - 1] +  # 保留首尾
+            list(set(int(i * (n - 1) / (keep - 1)) for i in range(keep)))
+        )
+        indices = sorted(set(indices))[:keep]
+        result.append([stroke[i] for i in indices])
+    return result
+
+
+_rng = np.random.default_rng()
+
+
+def strokes_to_sequence(
+    strokes: list[list[tuple[int, int]]],
+    augment: bool = False,
+) -> np.ndarray:
+    """将笔画数据转为 (seq_len, 5) 特征序列: [x, y, dx, dy, pen_down].
+
+    Args:
+        strokes: 笔画坐标列表
+        augment: 是否启用数据增强（随机下采样）
+    """
+    # ── 数据增强：随机下采样改变点密度 ──
+    if augment:
+        ratio = _rng.uniform(0.15, 1.0)
+        strokes = _downsample_strokes(strokes, ratio)
     all_points: list[tuple[int, int]] = []
     pen_down_flags: list[int] = []
 
@@ -171,9 +211,11 @@ class StrokeSequenceDataset(Dataset):
         max_samples_per_char: int | None = None,
         max_seq_len: int = 512,
         rebuild_cache: bool = False,
+        augment: bool = False,
     ):
         self.char_index = char_index
         self.max_seq_len = max_seq_len
+        self.augment = augment
 
         # 尝试加载缓存索引
         cache_path = _index_cache_path(data_root, char_index, max_samples_per_char)
@@ -208,7 +250,7 @@ class StrokeSequenceDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[np.ndarray, int]:
         pot_path, byte_offset, label_idx = self.index[idx]
         strokes = _read_one_sample_strokes(pot_path, byte_offset)
-        seq = strokes_to_sequence(strokes)
+        seq = strokes_to_sequence(strokes, augment=self.augment)
         if len(seq) > self.max_seq_len:
             seq = seq[:self.max_seq_len]
             seq[-1, 4] = 0  # 截断点设为抬笔
