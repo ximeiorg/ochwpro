@@ -118,10 +118,10 @@ def strokes_to_sequence(strokes: list[list[tuple[int, int]]]) -> np.ndarray:
     range_y = max(max_y - min_y, 1.0)
 
     seq = np.column_stack([
-        (xs - min_x) / range_x,   # x_norm
-        (ys - min_y) / range_y,   # y_norm
-        np.diff(xs, prepend=xs[0:1]),  # dx
-        np.diff(ys, prepend=ys[0:1]),  # dy
+        (xs - min_x) / range_x,                    # x_norm
+        (ys - min_y) / range_y,                    # y_norm
+        np.diff(xs, prepend=xs[0:1]) / range_x,    # dx_norm (归一化!)
+        np.diff(ys, prepend=ys[0:1]) / range_y,    # dy_norm (归一化!)
         np.array(pen_down_flags, dtype=np.float32),  # pen_down
     ])
     return seq.astype(np.float32)
