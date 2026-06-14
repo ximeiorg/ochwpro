@@ -1,0 +1,27 @@
+[project]
+name = "ochwpro"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "lightning>=2.6.5",
+    "matplotlib>=3.11.0",
+    "numpy>=2.4.6",
+    "pypinyin>=0.55.0",
+    "rich>=15.0.0",
+    "scikit-learn>=1.9.0",
+    "tensordict>=0.13.0",
+    "torch",
+]
+
+[[tool.uv.index]]
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple/"
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
