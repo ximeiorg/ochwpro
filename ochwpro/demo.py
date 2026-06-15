@@ -175,10 +175,19 @@ class HandwritingApp:
 
         self._build_ui()
 
-        # 鼠标事件（触摸屏在 Windows 下会自动转为鼠标事件）
+        # 鼠标事件
         self.canvas.bind("<Button-1>", self._on_mouse_down)
         self.canvas.bind("<B1-Motion>", self._on_mouse_move)
         self.canvas.bind("<ButtonRelease-1>", self._on_mouse_up)
+
+        # 触摸事件（部分设备支持，忽略不支持的情况）
+        for ev, handler in [("<Touch>", self._on_touch_down),
+                            ("<TouchMotion>", self._on_touch_move),
+                            ("<Release>", self._on_touch_up)]:
+            try:
+                self.canvas.bind(ev, handler, add='+')
+            except tk.TclError:
+                pass
 
     def _build_ui(self):
         import tkinter as tk
@@ -192,15 +201,15 @@ class HandwritingApp:
         ttk.Button(top, text="清空", command=self.clear).pack(side='right', padx=2)
         ttk.Button(top, text="撤销笔画", command=self.undo_stroke).pack(side='right', padx=2)
 
-        # 画布
+        # 画布（缩小高度留给候选区）
         cf = ttk.Frame(self.root)
         cf.pack(fill='both', expand=True, padx=5)
-        self.canvas = tk.Canvas(cf, bg='white', cursor='crosshair', height=400)
+        self.canvas = tk.Canvas(cf, bg='white', cursor='crosshair', height=300)
         self.canvas.pack(fill='both', expand=True)
 
         # 主要候选（大字号显示）
         main_f = ttk.Frame(self.root)
-        main_f.pack(fill='x', padx=5, pady=2)
+        main_f.pack(fill='x', padx=10, pady=(5,0))
         ttk.Label(main_f, text="➤", font=('微软雅黑', 14)).pack(side='left')
         self.main_result = tk.StringVar(value="等待书写...")
         ttk.Label(main_f, textvariable=self.main_result,
@@ -208,14 +217,15 @@ class HandwritingApp:
 
         # Top-10 候选按钮
         btn_f = ttk.Frame(self.root)
-        btn_f.pack(fill='x', padx=5, pady=2)
+        btn_f.pack(fill='x', padx=10, pady=(5,5))
         self.candidate_buttons = []
         for i in range(self.top_k):
-            btn = ttk.Button(
-                btn_f, text='', width=5,
+            btn = tk.Button(
+                btn_f, text='', width=3, font=('微软雅黑', 18),
                 command=lambda idx=i: self._select_candidate(idx),
+                relief='raised', bd=2,
             )
-            btn.pack(side='left', padx=1)
+            btn.pack(side='left', padx=2, fill='y', ipadx=4, ipady=12)
             self.candidate_buttons.append(btn)
 
         # 状态栏
@@ -242,9 +252,12 @@ class HandwritingApp:
     def _on_mouse_up(self, event):
         if self.current_stroke:
             self.current_stroke.append((event.x, event.y))
-            self.strokes.append(self.current_stroke)
+            # 忽略纯点击（没有实际拖动）
+            if len(set(self.current_stroke)) >= 2:
+                self.strokes.append(self.current_stroke)
             self.current_stroke = []
-            self._predict()
+            if self.strokes:
+                self._predict()
 
     def _on_touch_down(self, event):
         self.current_stroke = [(int(event.x), int(event.y))]
@@ -260,9 +273,12 @@ class HandwritingApp:
 
     def _on_touch_up(self, event):
         if self.current_stroke:
-            self.strokes.append(self.current_stroke)
+            # 忽略纯点击（没有实际拖动）
+            if len(set(self.current_stroke)) >= 2:
+                self.strokes.append(self.current_stroke)
             self.current_stroke = []
-            self._predict()
+            if self.strokes:
+                self._predict()
 
     def _predict(self):
         if not self.strokes:
@@ -276,12 +292,13 @@ class HandwritingApp:
 
         # 更新候选按钮
         for i, (ch, prob) in enumerate(results):
-            self.candidate_buttons[i].config(text=f"{ch}\n{prob:.0%}")
+            self.candidate_buttons[i].config(text=f"{i+1}.{ch}")
 
         # 状态
         total_points = sum(len(s) for s in self.strokes)
+        best_ch, best_prob = results[0]
         self.status_var.set(f"笔画: {len(self.strokes)} | 轨迹点: {total_points} | "
-                            f"序列长度: {sum(len(s) for s in self.strokes)}")
+                            f"最佳: {best_ch} ({best_prob:.1%})")
 
         # 记录日志
         self._save_log(results)

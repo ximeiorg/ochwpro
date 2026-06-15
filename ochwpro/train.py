@@ -14,23 +14,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import CSVLogger
 
 from .char_index import CharIndex
-from .dataset import StrokeSequenceDataset, collate_sequences, _read_one_sample_strokes, strokes_to_sequence
-from torch.utils.data import Subset
-
-
-class AugmentedSubset(Subset):
-    """训练子集，每次 __getitem__ 时重新读取并应用数据增强."""
-
-    def __getitem__(self, idx):
-        pot_path, byte_offset, _ = self.dataset.index[self.indices[idx]]
-        strokes = _read_one_sample_strokes(pot_path, byte_offset)
-        seq = strokes_to_sequence(strokes, augment=True)
-        if len(seq) > self.dataset.max_seq_len:
-            seq = seq[:self.dataset.max_seq_len]
-            seq[-1, 4] = 0
-        # 从原始数据集获取标签
-        _, _, label = self.dataset.index[self.indices[idx]]
-        return seq, label
+from .dataset import StrokeSequenceDataset, collate_sequences
 
 
 class LitStrokeClassifier(L.LightningModule):
@@ -125,13 +109,10 @@ def build_training_data(
     # 分割训练/验证
     val_size = int(len(full_dataset) * val_split)
     train_size = len(full_dataset) - val_size
-    train_indices, val_indices = random_split(
-        range(len(full_dataset)), [train_size, val_size],
+    train_ds, val_ds = random_split(
+        full_dataset, [train_size, val_size],
         generator=torch.Generator().manual_seed(42),
     )
-
-    train_ds = AugmentedSubset(full_dataset, train_indices.indices)
-    val_ds = Subset(full_dataset, val_indices.indices)
 
     import os
     num_workers = min(os.cpu_count() or 4, 12)  # 充分利用多进程加载
