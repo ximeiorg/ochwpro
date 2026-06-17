@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, random_split
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
-from lightning.pytorch.loggers import CSVLogger
+from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
 
 from .char_index import CharIndex
 from .dataset import StrokeSequenceDataset, collate_sequences
@@ -191,12 +191,18 @@ def train(args=None):
     ]
 
     # 训练器
+    csv_logger = CSVLogger('logs', name='ochwpro')
     trainer = L.Trainer(
         max_epochs=opts.max_epochs,
         accelerator='auto',
         devices=opts.devices,
         callbacks=callbacks,
-        logger=CSVLogger('logs', name='ochwpro'),
+        logger=[
+            csv_logger,
+            TensorBoardLogger('logs', name='ochwpro', version=csv_logger.version,
+                              default_hp_metric=False),
+        ],
+        val_check_interval=5000,
         fast_dev_run=opts.fast_dev_run,
         enable_progress_bar=True,
     )
