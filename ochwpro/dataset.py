@@ -158,10 +158,10 @@ def strokes_to_sequence(
     range_y = max(max_y - min_y, 1.0)
 
     seq = np.column_stack([
-        (xs - min_x) / range_x,                    # x_norm
-        (ys - min_y) / range_y,                    # y_norm
-        np.diff(xs, prepend=xs[0:1]),              # dx（原始差值，与旧模型一致）
-        np.diff(ys, prepend=ys[0:1]),              # dy（原始差值，与旧模型一致）
+        (xs - min_x) / range_x,                    # x_norm ∈ [0,1]
+        (ys - min_y) / range_y,                    # y_norm ∈ [0,1]
+        np.diff(xs, prepend=xs[0:1]) / range_x,    # dx_norm（按 x 范围归一化）
+        np.diff(ys, prepend=ys[0:1]) / range_y,    # dy_norm（按 y 范围归一化）
         np.array(pen_down_flags, dtype=np.float32),# pen_down
     ])
     return seq.astype(np.float32)

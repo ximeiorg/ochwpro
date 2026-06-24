@@ -19,7 +19,6 @@ from torch.utils.data import DataLoader, Subset
 from .char_index import CharIndex
 from .dataset import (
     StrokeSequenceDataset,
-    AugmentedSubset,
     collate_sequences,
 )
 from .model import StrokeTransformer
@@ -56,14 +55,11 @@ def build_small_dataset(
     train_idx = indices[:-val_n]
     val_idx = indices[-val_n:]
 
-    train_subset = Subset(full, train_idx)
-    val_subset = Subset(full, val_idx)
-
+    # 训练集使用增强（如有），验证集不用
     if augment:
-        train_ds = AugmentedSubset(train_subset)
-    else:
-        train_ds = train_subset
-    val_ds = val_subset
+        full.augment = True  # 复用数据集对象，切换 augment 标志
+    train_ds = Subset(full, train_idx)
+    val_ds = Subset(full, val_idx)
 
     train_loader = DataLoader(
         train_ds, batch_size=BATCH_SIZE, shuffle=True,

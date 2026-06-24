@@ -1,11 +1,17 @@
 """
-触摸屏手写汉字输入演示 — 基于 StrokeTransformer 的实时轨迹识别。
+触摸屏手写汉字输入演示 — 基于 StrokeTransformer 的实时单字轨迹识别。
 
 输入法场景：用户书写笔画 → 实时提取轨迹序列 → Transformer 预测 Top-K 候选字。
 可直接替换为手机输入法的识别引擎。
 
+支持模型格式:
+  - .onnx     ONNX 格式 (含 INT8 量化版)
+  - .pt       训练脚本最终保存格式
+  - .ckpt     Lightning ModelCheckpoint 格式
+
 用法:
-  python -m ochwpro.demo [--model checkpoints/ochwpro-final.pt]
+  python -m ochwpro.demo                              # 自动加载最新模型
+  python -m ochwpro.demo --model checkpoints/ochwpro-int8.onnx  # ONNX 推理
 """
 
 import argparse
@@ -26,15 +32,69 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load_model(model_path: str | Path):
-    """加载训练好的 StrokeTransformer 和字符索引.
+    """加载训练好的单字分类模型和字符索引.
 
-    支持两种格式:
-      - ochwpro-final.pt: 训练脚本最终保存的格式
-      - last.ckpt: Lightning ModelCheckpoint 保存的格式
+    支持:
+      - StrokeTransformer (单字分类): .onnx / .pt / .ckpt
     """
+    model_path = Path(model_path)
+
+    # ── ONNX 格式 (.onnx) ──
+    if model_path.suffix == '.onnx':
+        import onnxruntime as ort
+        from .char_index import CharIndex
+        char_index = CharIndex.load('data/char_index.json')
+        chars = char_index.chars
+
+        session = ort.InferenceSession(str(model_path))
+        input_name = session.get_inputs()[0].name
+        mask_name = session.get_inputs()[1].name
+
+        class ONNXModel:
+            def __init__(self, session, input_name, mask_name):
+                self.session = session
+                self.input_name = input_name
+                self.mask_name = mask_name
+                self.device = 'cpu'
+                self._fixed_len = 200  # ONNX 导出时的固定序列长度
+
+            def __call__(self, x, mask=None):
+                # x: (1, T, 5), 补齐/截断到 fixed_len
+                T = x.shape[1]
+                if T < self._fixed_len:
+                    pad = self._fixed_len - T
+                    x = torch.cat([x, torch.zeros(1, pad, 5)], dim=1)
+                    if mask is not None:
+                        mask = torch.cat([mask, torch.zeros(1, pad, dtype=torch.bool)], dim=1)
+                    else:
+                        mask = torch.cat([torch.ones(1, T, dtype=torch.bool),
+                                          torch.zeros(1, pad, dtype=torch.bool)], dim=1)
+                elif T > self._fixed_len:
+                    x = x[:, :self._fixed_len, :]
+                    mask = mask[:, :self._fixed_len] if mask is not None else None
+
+                ort_inputs = {self.input_name: x.numpy()}
+                if mask is not None:
+                    ort_inputs[self.mask_name] = mask.numpy()
+                logits = self.session.run(None, ort_inputs)[0]
+                return torch.from_numpy(logits)
+
+            def parameters(self):
+                return []
+
+            def eval(self):
+                pass
+
+            def to(self, device):
+                return self
+
+        model = ONNXModel(session, input_name, mask_name)
+        return model, chars
+
+    # ── PyTorch 格式 (.pt / .ckpt) ──
     ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
 
-    # ── Lightning checkpoint (.ckpt) ──
+    # ── Lightning checkpoint (.ckpt, 单字模型) ──
     if 'hyper_parameters' in ckpt and 'state_dict' in ckpt:
         hp = ckpt['hyper_parameters']
         d_model = hp.get('d_model', 192)
@@ -157,13 +217,13 @@ def predict(model, chars, strokes, top_k: int = 10):
 
 
 class HandwritingApp:
-    """Tkinter 触摸屏手写输入应用 — 直接轨迹序列识别."""
+    """Tkinter 触摸屏手写输入应用 — 支持多字连写识别."""
 
     def __init__(self, model, chars):
         import tkinter as tk
         self.root = tk.Tk()
         self.root.title("手写汉字输入 — StrokeTransformer ✍")
-        self.root.geometry("620x520")
+        self.root.geometry("620x600")
 
         self.model = model
         self.chars = chars
@@ -172,6 +232,10 @@ class HandwritingApp:
         # 当前笔画数据（原始屏幕坐标）
         self.strokes: list[list[tuple[int, int]]] = []
         self.current_stroke: list[tuple[int, int]] = []
+        self._stroke_times: list[float] = []  # 每笔完成时间戳
+
+        # 已确认的文本
+        self.confirmed_text = ""
 
         self._build_ui()
 
@@ -221,7 +285,7 @@ class HandwritingApp:
         self.candidate_buttons = []
         for i in range(self.top_k):
             btn = tk.Button(
-                btn_f, text='', width=3, font=('微软雅黑', 18),
+                btn_f, text='', width=6, font=('微软雅黑', 16),
                 command=lambda idx=i: self._select_candidate(idx),
                 relief='raised', bd=2,
             )
@@ -252,7 +316,6 @@ class HandwritingApp:
     def _on_mouse_up(self, event):
         if self.current_stroke:
             self.current_stroke.append((event.x, event.y))
-            # 忽略纯点击（没有实际拖动）
             if len(set(self.current_stroke)) >= 2:
                 self.strokes.append(self.current_stroke)
             self.current_stroke = []
@@ -281,26 +344,21 @@ class HandwritingApp:
                 self._predict()
 
     def _predict(self):
+        """识别: 单字模型 top-k 候选."""
         if not self.strokes:
             return
+
         results = predict(self.model, self.chars, self.strokes, self.top_k)
         self._candidates = results
-
-        # 显示最佳候选
         best_ch, best_prob = results[0]
         self.main_result.set(f"{best_ch}")
-
-        # 更新候选按钮
         for i, (ch, prob) in enumerate(results):
             self.candidate_buttons[i].config(text=f"{i+1}.{ch}")
-
-        # 状态
         total_points = sum(len(s) for s in self.strokes)
-        best_ch, best_prob = results[0]
-        self.status_var.set(f"笔画: {len(self.strokes)} | 轨迹点: {total_points} | "
-                            f"最佳: {best_ch} ({best_prob:.1%})")
-
-        # 记录日志
+        self.status_var.set(
+            f"笔画: {len(self.strokes)} | 轨迹点: {total_points} | "
+            f"最佳: {best_ch} ({best_prob:.1%})"
+        )
         self._save_log(results)
 
     def _save_log(self, results):
@@ -316,16 +374,22 @@ class HandwritingApp:
             json.dump(log_entry, f, ensure_ascii=False, indent=2)
 
     def _select_candidate(self, idx: int):
-        if hasattr(self, '_candidates') and idx < len(self._candidates):
-            ch, prob = self._candidates[idx]
-            self.main_result.set(f"✔ {ch}")
-            self.status_var.set(f"已选: {ch} (置信度: {prob:.1%})")
+        """选择候选: 确认文本, 追加到已确认文本, 清空画布."""
+        if not hasattr(self, '_candidates') or idx >= len(self._candidates):
+            return
+
+        full_text, _ = self._candidates[idx]
+        self.confirmed_text += full_text
+        self.main_result.set(self.confirmed_text)
+        self.status_var.set(f"已确认: {self.confirmed_text}")
+        self.clear()
+        self.main_result.set(self.confirmed_text)
 
     def clear(self):
         self.canvas.delete('all')
         self.strokes = []
         self.current_stroke = []
-        self.main_result.set("等待书写...")
+        self.main_result.set(self.confirmed_text if self.confirmed_text else "等待书写...")
         for btn in self.candidate_buttons:
             btn.config(text='')
         self._candidates = []
@@ -395,13 +459,26 @@ def replay_log(log_path: str | Path, model_path: str | Path = 'checkpoints/last.
 
 
 def main():
-    parser = argparse.ArgumentParser(description='手写汉字输入演示 (StrokeTransformer)')
-    parser.add_argument('--model', type=str, default='checkpoints/last.ckpt')
+    parser = argparse.ArgumentParser(description='手写汉字输入演示 (StrokeTransformer 单字识别)')
+    parser.add_argument('--model', type=str, default=None,
+                        help='模型路径 (默认: 自动检测最新模型)')
     parser.add_argument('--replay', type=str, default=None,
                         help='回放日志文件中的笔画进行预测')
     args = parser.parse_args()
 
-    model_path = Path(args.model)
+    # ── 自动检测最新模型 ──
+    if args.model:
+        model_path = Path(args.model)
+    else:
+        # 默认用单字模型
+        single_ckpt = Path('checkpoints/last.ckpt')
+        if single_ckpt.exists():
+            model_path = single_ckpt
+            print("加载单字模型")
+        else:
+            print("错误: 未找到可用模型 (checkpoints/last.ckpt)")
+            return
+
     if not model_path.exists():
         print(f"错误: 模型文件不存在: {model_path}")
         return
@@ -414,8 +491,11 @@ def main():
     # ── GUI 模式 ──
     print(f"加载模型: {model_path}")
     model, chars = load_model(model_path)
-    print(f"字符集: {len(chars)} 个 | "
-          f"参数量: {sum(p.numel() for p in model.parameters()):,}")
+    n_params = sum(p.numel() for p in model.parameters())
+    if n_params > 0:
+        print(f"字符集: {len(chars)} 个 | 参数量: {n_params:,}")
+    else:
+        print(f"字符集: {len(chars)} 个 | ONNX 推理 (INT8 量化)")
     print(f"日志目录: {LOG_DIR}/")
 
     app = HandwritingApp(model, chars)

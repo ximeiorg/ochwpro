@@ -2,6 +2,8 @@
 
 使用 **Transformer** 编码器对笔画轨迹序列进行实时分类的轻量级手写输入引擎。
 
+基于 CASIA-OLHWDB 数据集训练，支持 **7356** 类汉字单字识别。
+
 ## 模型设计 — StrokeTransformer
 
 ### 整体架构
@@ -12,7 +14,7 @@
       ▼                                          │
 ┌─────────────┐    ┌──────────────────┐    ┌──────────┐
 │ Input Proj  │───►│  Transformer     │───►│ Classifier│
-│ Linear(5→192)│    │  Encoder ×3      │    │  Head     │
+│ Linear(5→d)  │    │  Encoder ×3      │    │  Head     │
 └─────────────┘    └──────────────────┘    └──────────┘
       │                    ↑
       ▼                    │
@@ -41,20 +43,24 @@
 | d_model | 192 | Transformer 隐藏维度 |
 | nhead | 4 | 注意力头数 |
 | num_layers | 3 | Transformer 编码器层数 |
-| dim_feedforward | 384 | FFN 隐藏层维度 (2×d_model) |
+| dim_feedforward | 384 | FFN 隐藏层维度 |
 | dropout | 0.2 | Dropout 比率 |
 | max_seq_len | 512 | 最大轨迹序列长度 |
 | **参数量** | **~2.5M** | 轻量，适合移动端部署 |
 
 ### 关键设计决策
 
-1. **[CLS] Token 分类** — 参考 BERT，在序列前拼接一个可学习的 [CLS] token，取其在 Transformer 输出中的对应向量作为分类依据，让模型自动学习关注最重要的轨迹信息。
+1. **[CLS] Token 分类** — 参考 BERT，在序列前拼接一个可学习的 [CLS] token，取其在 Transformer 输出中的对应向量作为分类依据。
 
-2. **Pre-Norm 架构** — 使用 `norm_first=True`（LayerNorm 在 Attention/FFN 之前），相比 Post-Norm 训练更稳定，对学习率变化更鲁棒。
+2. **Pre-Norm 架构** — `norm_first=True`，训练更稳定。
 
-3. **可学习位置编码** — 参数化的位置编码向量（而非三角函数固定编码），让模型能自适应学习笔画轨迹的顺序关系。
+3. **可学习位置编码** — 让模型自适应学习笔画轨迹的顺序关系。
 
-4. **轻量设计** — 仅 ~2.5M 参数，可导出 TorchScript 用于手机端推理，适合替代传统输入法中的手写识别引擎。
+4. **2 层 MLP 分类头** — `Linear(d_model → d_model/2) → GELU → Dropout → Linear(d_model/2 → num_classes)`，增强分类能力。
+
+### 数据增强
+
+训练时对笔画轨迹做随机下采样（保留 15%~100% 的点），让模型适应不同采样密度（CASIA 数据 ~8-24 点/字 vs 鼠标输入 ~50+ 点/字）。
 
 ### 训练配置
 
@@ -66,24 +72,29 @@
 | Batch 大小 | 128 |
 | Epoch | 30 |
 | 早停 | patience=10 (monitor=val_acc) |
-| 数据增强 | 坐标归一化、序列截断/填充 |
+| 验证间隔 | 每 5000 步 |
 
+### 当前结果
+
+训练 30 个 epoch 后，在 CASIA-OLHWDB 测试集上达到 **88.86%** 的 Top-1 验证精度。
+
+> 最佳权重: `checkpoints/ochwpro-epoch=28-val_acc=0.8886.ckpt`
 
 ## 使用方法
 
 ### 训练
 
 ```bash
-# 使用默认参数训练
+# 训练
 uv run python -m ochwpro.train
 
-# 自定义参数
-uv run python -m ochwpro.train \
-    --data-root data \
-    --batch-size 128 \
-    --max-epochs 30 \
-    --d-model 192 \
-    --lr 1e-3
+# 实时查看训练曲线（另开终端）
+uv run tensorboard --logdir logs
+# 浏览器打开 http://localhost:6006
+
+# 快速验证（小数据集测试模型是否能学习）
+uv run python -m ochwpro.quick_test
+uv run python -m ochwpro.quick_test --augment         # 带增强
 ```
 
 ### 参数说明
@@ -101,11 +112,71 @@ uv run python -m ochwpro.train \
 | `--lr` | `1e-3` | 学习率 |
 | `--max-epochs` | `30` | 最大训练轮数 |
 | `--resume` | — | 从 checkpoint 恢复训练 |
+| `--fast-dev-run` | — | 快速开发模式（仅跑 1 batch） |
+
+### 检查点目录结构
+
+```
+logs/ochwpro/version_X/
+├── metrics.csv                  # 训练指标
+├── events.out.tfevents.*        # TensorBoard 事件
+└── checkpoints/
+    ├── last.ckpt                         # 最后 epoch
+    ├── ochwpro-epoch=28-val_acc=0.8886.ckpt  # Top-3
+    └── ochwpro-best.ckpt                 # 最佳权重
+```
+
+### 导出 ONNX 移动端部署
+
+```bash
+# 导出 FP32 + FP16 + INT8 量化模型
+uv run python -m ochwpro.export_onnx
+
+# 指定模型和序列长度
+uv run python -m ochwpro.export_onnx --model checkpoints/last.ckpt --seq-len 300
+```
+
+输出:
+- `checkpoints/ochwpro.onnx` — FP32 (动态 batch)
+- `checkpoints/ochwpro-fp16.onnx` — FP16 (精度无损)
+- `checkpoints/ochwpro-int8.onnx` — INT8 量化 (体积缩小 4x)
 
 ### 启动手写输入演示
 
 ```bash
-uv run python -m ochwpro.demo --model checkpoints/ochwpro-final.pt
+# 自动加载最新模型
+uv run python -m ochwpro.demo
+
+# 指定模型
+uv run python -m ochwpro.demo --model checkpoints/ochwpro-epoch=28-val_acc=0.8886.ckpt
+
+# ONNX 推理
+uv run python -m ochwpro.demo --model checkpoints/ochwpro-int8.onnx
+
+# 回放日志
+uv run python -m ochwpro.demo --replay logs/demo/stroke_20250615_123456.json
 ```
 
 打开 Tkinter 窗口后，用鼠标或触摸屏书写汉字，模型实时返回 Top-10 候选字。
+
+## 项目结构
+
+```
+ochwpro/
+├── model.py          # StrokeTransformer 模型定义
+├── train.py          # 训练脚本 (Lightning)
+├── demo.py           # Tkinter 手写输入演示
+├── dataset.py        # 数据集加载 & 特征提取
+├── char_index.py     # 字符↔标签索引映射
+├── pot_parser.py     # .pot 二进制文件解析器
+├── export_onnx.py    # ONNX 导出 + INT8 量化
+└── quick_test.py     # 快速验证脚本
+```
+
+## 数据集
+
+使用 CASIA-OLHWDB 离线手写汉字数据集：
+- **300万+** 样本
+- **1020** 位书写者
+- **7356** 个汉字类别
+- **POT 格式** 二进制笔画轨迹存储

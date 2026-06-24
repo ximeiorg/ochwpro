@@ -3,6 +3,7 @@
 """
 
 import sys
+import os
 from pathlib import Path
 
 import torch
@@ -180,9 +181,13 @@ def train(args=None):
     )
 
     # 回调
+    # 日志器 (先创建，后面 checkpoints 要用到路径)
+    csv_logger = CSVLogger('logs', name='ochwpro')
+
+    # 回调
     callbacks = [
         ModelCheckpoint(
-            dirpath='checkpoints',
+            dirpath=os.path.join(csv_logger.log_dir, 'checkpoints'),
             filename='ochwpro-{epoch:02d}-{val_acc:.4f}',
             monitor='val_acc', mode='max',
             save_top_k=3, save_last=True,
@@ -191,7 +196,6 @@ def train(args=None):
     ]
 
     # 训练器
-    csv_logger = CSVLogger('logs', name='ochwpro')
     trainer = L.Trainer(
         max_epochs=opts.max_epochs,
         accelerator='auto',
