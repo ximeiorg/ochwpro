@@ -1,0 +1,153 @@
+.app-container {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px 12px;
+  user-select: none;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #e8f0fe;
+  color: #1a73e8;
+}
+
+.btn {
+  padding: 4px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.btn:hover {
+  background: #f5f5f5;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.main-result {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1a73e8;
+  padding: 8px 0 4px;
+  min-height: 48px;
+  word-break: break-all;
+}
+
+.candidates {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.cand-btn {
+  flex: 1;
+  min-width: 52px;
+  padding: 10px 4px;
+  border: 2px solid #e0e0e0;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 20px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s;
+}
+
+.cand-btn:hover {
+  border-color: #1a73e8;
+  background: #e8f0fe;
+}
+
+.cand-btn-empty {
+  color: #ccc;
+  cursor: default;
+}
+
+.cand-btn-empty:hover {
+  border-color: #e0e0e0;
+  background: #fff;
+}
+
+.status {
+  font-size: 12px;
+  color: #888;
+  padding: 4px 0;
+  min-height: 20px;
+}
+
+.history {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #eee;
+  font-size: 14px;
+}
+
+.history strong {
+  margin-right: 4px;
+}
+
+.loading-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid #e0e0e0;
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hint {
+  font-size: 13px;
+  color: #999;
+}
+
+.error {
+  text-align: center;
+  padding: 40px 20px;
+  color: #d32f2f;
+}
+
+.error code {
+  background: #f5f5f5;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}

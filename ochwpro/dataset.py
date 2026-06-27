@@ -122,6 +122,61 @@ def _downsample_strokes(
 _rng = np.random.default_rng()
 
 
+def _augment_strokes(
+    strokes: list[list[tuple[int, int]]],
+) -> list[list[tuple[int, int]]]:
+    """数据增强: 让模型适应鼠标/触屏输入.
+
+    1. 随机下采样 (改变点密度)
+    2. 坐标抖动 (模拟鼠标采样噪声)
+    3. 随机缩放 (模拟不同画布比例)
+    4. 随机旋转 (模拟书写角度偏差)
+    """
+    # 1. 随机下采样
+    ratio = _rng.uniform(0.15, 1.0)
+    strokes = _downsample_strokes(strokes, ratio)
+
+    # 展平所有点计算整体范围
+    all_pts = [(x, y) for s in strokes for (x, y) in s]
+    if not all_pts:
+        return strokes
+    xs = np.array([p[0] for p in all_pts])
+    ys = np.array([p[1] for p in all_pts])
+    cx, cy = xs.mean(), ys.mean()
+    range_val = max(xs.max() - xs.min(), ys.max() - ys.min(), 1.0)
+
+    # 2. 坐标抖动 (±2% 范围)
+    noise_scale = range_val * 0.02
+    jittered = []
+    for stroke in strokes:
+        jx = _rng.uniform(-noise_scale, noise_scale)
+        jy = _rng.uniform(-noise_scale, noise_scale)
+        jittered.append([(x + jx, y + jy) for (x, y) in stroke])
+    strokes = jittered
+
+    # 3. 随机缩放 (0.85x~1.15x, x/y 独立)
+    sx = _rng.uniform(0.85, 1.15)
+    sy = _rng.uniform(0.85, 1.15)
+    scaled = []
+    for stroke in strokes:
+        scaled.append([((x - cx) * sx + cx, (y - cy) * sy + cy) for (x, y) in stroke])
+    strokes = scaled
+
+    # 4. 随机旋转 (±15 度)
+    angle = _rng.uniform(-15, 15) * np.pi / 180
+    cos_a, sin_a = np.cos(angle), np.sin(angle)
+    rotated = []
+    for stroke in strokes:
+        rotated.append([
+            ((x - cx) * cos_a - (y - cy) * sin_a + cx,
+             (x - cx) * sin_a + (y - cy) * cos_a + cy)
+            for (x, y) in stroke
+        ])
+    strokes = rotated
+
+    return strokes
+
+
 def strokes_to_sequence(
     strokes: list[list[tuple[int, int]]],
     augment: bool = False,
@@ -130,12 +185,11 @@ def strokes_to_sequence(
 
     Args:
         strokes: 笔画坐标列表
-        augment: 是否启用数据增强（随机下采样）
+        augment: 是否启用数据增强
     """
-    # ── 数据增强：随机下采样改变点密度 ──
+    # ── 数据增强 ──
     if augment:
-        ratio = _rng.uniform(0.15, 1.0)
-        strokes = _downsample_strokes(strokes, ratio)
+        strokes = _augment_strokes(strokes)
     all_points: list[tuple[int, int]] = []
     pen_down_flags: list[int] = []
 

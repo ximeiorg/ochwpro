@@ -1,0 +1,17 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #fafafa;
+  color: #333;
+  font-family: 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button:focus-visible {
+  outline: 2px solid #1a73e8;
+  outline-offset: 2px;
+}

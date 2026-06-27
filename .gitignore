@@ -10,3 +10,11 @@ wheels/
 .venv
 /data
 /logs
+/target
+
+# Rust / WASM build output
+ochw-web/pkg/
+
+# Node
+ochw-web/node_modules/
+frontend/node_modules/

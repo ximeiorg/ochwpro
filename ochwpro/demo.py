@@ -1,8 +1,7 @@
 """
-触摸屏手写汉字输入演示 — 基于 StrokeTransformer 的实时单字轨迹识别。
+触摸屏手写汉字输入演示 — 基于 StrokeTransformer 的实时单字/叠写轨迹识别。
 
-输入法场景：用户书写笔画 → 实时提取轨迹序列 → Transformer 预测 Top-K 候选字。
-可直接替换为手机输入法的识别引擎。
+支持连续书写多字 (叠写), 通过 DP + 单字模型自动切分识别。
 
 支持模型格式:
   - .onnx     ONNX 格式 (含 INT8 量化版)
@@ -10,8 +9,8 @@
   - .ckpt     Lightning ModelCheckpoint 格式
 
 用法:
-  python -m ochwpro.demo                              # 自动加载最新模型
-  python -m ochwpro.demo --model checkpoints/ochwpro-int8.onnx  # ONNX 推理
+  python -m ochwpro.demo                                            # 自动模式
+  python -m ochwpro.demo --model checkpoints/ochwpro-int8.onnx      # ONNX 推理
 """
 
 import argparse
@@ -217,17 +216,19 @@ def predict(model, chars, strokes, top_k: int = 10):
 
 
 class HandwritingApp:
-    """Tkinter 触摸屏手写输入应用 — 支持多字连写识别."""
+    """Tkinter 触摸屏手写输入应用 — 支持单字/叠写识别."""
 
-    def __init__(self, model, chars):
+    def __init__(self, model, chars, segment_engine=None):
         import tkinter as tk
         self.root = tk.Tk()
         self.root.title("手写汉字输入 — StrokeTransformer ✍")
-        self.root.geometry("620x600")
+        self.root.geometry("620x700")
 
         self.model = model
         self.chars = chars
         self.top_k = 10
+        self.segment_engine = segment_engine
+        self.overwrite_enabled = tk.BooleanVar(value=segment_engine is not None)
 
         # 当前笔画数据（原始屏幕坐标）
         self.strokes: list[list[tuple[int, int]]] = []
@@ -262,8 +263,19 @@ class HandwritingApp:
         top.pack(fill='x', padx=5, pady=5)
         ttk.Label(top, text="✍ 手写输入（轨迹序列识别）",
                   font=('微软雅黑', 12, 'bold')).pack(side='left')
+
+        # 叠写开关
+        has_segmenter = self.segment_engine is not None
+        self.overwrite_btn = ttk.Checkbutton(
+            top, text="叠写", variable=self.overwrite_enabled,
+            command=self._toggle_overwrite,
+        )
+        self.overwrite_btn.pack(side='right', padx=2)
+        if not has_segmenter:
+            self.overwrite_btn.config(state='disabled')
+
+        ttk.Button(top, text="撤销", command=self.undo_stroke).pack(side='right', padx=2)
         ttk.Button(top, text="清空", command=self.clear).pack(side='right', padx=2)
-        ttk.Button(top, text="撤销笔画", command=self.undo_stroke).pack(side='right', padx=2)
 
         # 画布（缩小高度留给候选区）
         cf = ttk.Frame(self.root)
@@ -318,6 +330,7 @@ class HandwritingApp:
             self.current_stroke.append((event.x, event.y))
             if len(set(self.current_stroke)) >= 2:
                 self.strokes.append(self.current_stroke)
+                self._stroke_times.append(time.time())
             self.current_stroke = []
             if self.strokes:
                 self._predict()
@@ -339,15 +352,31 @@ class HandwritingApp:
             # 忽略纯点击（没有实际拖动）
             if len(set(self.current_stroke)) >= 2:
                 self.strokes.append(self.current_stroke)
+                self._stroke_times.append(time.time())
             self.current_stroke = []
             if self.strokes:
                 self._predict()
 
+    def _toggle_overwrite(self):
+        """切换叠写/单字模式."""
+        if self.overwrite_enabled.get():
+            self.status_var.set("叠写模式: 连续书写多字, 自动切分")
+        else:
+            self.status_var.set("单字模式: 每次写一个字")
+        self.clear()
+
     def _predict(self):
-        """识别: 单字模型 top-k 候选."""
+        """识别: 叠写模式或单字模式."""
         if not self.strokes:
             return
 
+        if self.overwrite_enabled.get() and self.segment_engine:
+            self._predict_overwrite()
+        else:
+            self._predict_single()
+
+    def _predict_single(self):
+        """单字模式: top-k 候选."""
         results = predict(self.model, self.chars, self.strokes, self.top_k)
         self._candidates = results
         best_ch, best_prob = results[0]
@@ -360,6 +389,46 @@ class HandwritingApp:
             f"最佳: {best_ch} ({best_prob:.1%})"
         )
         self._save_log(results)
+        # 终端输出
+        cand_str = "  ".join(f"{i+1}.{ch}({prob:.1%})" for i, (ch, prob) in enumerate(results[:5]))
+        print(f"[识别] {cand_str}")
+
+    def _predict_overwrite(self):
+        """叠写模式: 用 SegmentEngine 切分+识别."""
+        engine = self.segment_engine
+
+        # 将当前所有笔画送入 segment engine
+        engine.buffer_strokes = list(self.strokes)
+        engine.buffer_times = list(self._stroke_times)
+        engine._segment()
+
+        # 获取候选文本
+        candidates = engine.get_candidates(top_k=self.top_k)
+        self._candidates = candidates
+
+        if candidates:
+            best_text = candidates[0][0]
+            full_text = self.confirmed_text + best_text if self.confirmed_text else best_text
+            self.main_result.set(full_text)
+            for i, (text, prob) in enumerate(candidates):
+                display = text if len(text) <= 6 else text[:5] + "…"
+                self.candidate_buttons[i].config(text=f"{i+1}.{display}")
+        for i in range(len(candidates), self.top_k):
+            self.candidate_buttons[i].config(text='')
+
+        total_strokes = sum(len(s) for s in self.strokes)
+        self.status_var.set(
+            f"叠写 | 笔画: {len(self.strokes)} | 已识: {len(engine.latest_chars)}字 | "
+            f"轨迹点: {total_strokes}"
+        )
+
+        # 保存日志
+        self._save_log(candidates)
+
+        # 终端输出
+        if candidates:
+            cand_str = "  ".join(f"{i+1}.{text}({prob:.1%})" for i, (text, prob) in enumerate(candidates[:5]))
+            print(f"[叠写] {cand_str}")
 
     def _save_log(self, results):
         """将当前笔画和预测结果保存到日志文件."""
@@ -367,7 +436,7 @@ class HandwritingApp:
         log_entry = {
             'timestamp': timestamp,
             'strokes': [[list(pt) for pt in stroke] for stroke in self.strokes],
-            'predictions': [{'char': ch, 'prob': round(prob, 4)} for ch, prob in results],
+            'predictions': [{'text': text, 'prob': round(prob, 4)} for text, prob in results],
         }
         log_path = LOG_DIR / f'stroke_{timestamp}.json'
         with open(log_path, 'w', encoding='utf-8') as f:
@@ -449,17 +518,17 @@ def replay_log(log_path: str | Path, model_path: str | Path = 'checkpoints/last.
 
     print('\n预测结果:')
     for i, (ch, prob) in enumerate(results):
-        mark = ' ★' if data['predictions'] and ch == data['predictions'][0]['char'] else ''
+        mark = ' ★' if data['predictions'] and ch == data['predictions'][0]['text'] else ''
         print(f'  {i+1}. {ch} ({prob:.2%}){mark}')
 
     # 对比原结果
     print('\n原始结果:')
     for i, p in enumerate(data['predictions'][:10]):
-        print(f'  {i+1}. {p["char"]} ({p["prob"]:.2%})')
+        print(f'  {i+1}. {p["text"]} ({p["prob"]:.2%})')
 
 
 def main():
-    parser = argparse.ArgumentParser(description='手写汉字输入演示 (StrokeTransformer 单字识别)')
+    parser = argparse.ArgumentParser(description='手写汉字输入演示 (StrokeTransformer 单字/叠写识别)')
     parser.add_argument('--model', type=str, default=None,
                         help='模型路径 (默认: 自动检测最新模型)')
     parser.add_argument('--replay', type=str, default=None,
@@ -470,11 +539,9 @@ def main():
     if args.model:
         model_path = Path(args.model)
     else:
-        # 默认用单字模型
         single_ckpt = Path('checkpoints/last.ckpt')
         if single_ckpt.exists():
             model_path = single_ckpt
-            print("加载单字模型")
         else:
             print("错误: 未找到可用模型 (checkpoints/last.ckpt)")
             return
@@ -498,7 +565,17 @@ def main():
         print(f"字符集: {len(chars)} 个 | ONNX 推理 (INT8 量化)")
     print(f"日志目录: {LOG_DIR}/")
 
-    app = HandwritingApp(model, chars)
+    # ── 初始化切分引擎 (DP + 单字模型) ──
+    segment_engine = None
+    if model is not None:
+        from .stroke_segmenter import SegmentEngine
+        segment_engine = SegmentEngine(
+            single_char_model=model,
+            chars=chars,
+        )
+        print("叠写引擎已就绪 (DP + 单字模型)")
+
+    app = HandwritingApp(model, chars, segment_engine=segment_engine)
     app.run()
 
 

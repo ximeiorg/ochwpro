@@ -1,0 +1,18 @@
+[package]
+name = "libochwpro"
+version = "0.1.0"
+edition = "2021"
+authors = ["kingzcheung <kingzcheung@gmail.com>"]
+description = "StrokeTransformer 推理库 (Rust + Candle)"
+license = "Apache-2.0"
+
+[dependencies]
+candle-nn = "0.9.1"
+candle-core = "0.9.1"
+anyhow = "1.0.100"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lib]
+name = "libochwpro"
+path = "src/lib.rs"

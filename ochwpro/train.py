@@ -105,6 +105,7 @@ def build_training_data(
         char_index=char_index,
         max_samples_per_char=max_samples_per_char,
         max_seq_len=max_seq_len,
+        augment=True,  # 启用数据增强提高鲁棒性
     )
 
     # 分割训练/验证

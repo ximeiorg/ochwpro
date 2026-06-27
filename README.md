@@ -144,7 +144,7 @@ uv run python -m ochwpro.export_onnx --model checkpoints/last.ckpt --seq-len 300
 ### 启动手写输入演示
 
 ```bash
-# 自动加载最新模型
+# 启动 (默认检测叠写引擎, GUI 上有"叠写"开关)
 uv run python -m ochwpro.demo
 
 # 指定模型
@@ -159,18 +159,46 @@ uv run python -m ochwpro.demo --replay logs/demo/stroke_20250615_123456.json
 
 打开 Tkinter 窗口后，用鼠标或触摸屏书写汉字，模型实时返回 Top-10 候选字。
 
+---
+
+## 叠写模式 — DP 切分引擎
+
+支持在同一区域连续书写多字，系统自动切分识别。
+
+### 原理
+
+不用额外训练任何模型，直接用单字分类模型做 DP 分割：
+
+```
+用户连续书写 (多字叠写)
+       ↓
+枚举所有可能的笔画分组 (j, i)
+       ↓
+每组用单字模型打分 → 置信度 P
+       ↓
+DP: dp[i] = max(dp[j] + log(P) + 切分惩罚)
+       ↓
+回溯最优切分路径 → 合并替代字 → 候选文本
+```
+
+- **DP 保证全局最优**：枚举所有切分方式，选总置信度最高的
+- **切分惩罚** `-0.3`：每多切一个字扣分，防止过度切分
+- **替代字组合**：每个切出来的字替换为 top-3 候选，生成更多候选文本
+- **不需要训练数据**：直接用已有单字模型打分
+
 ## 项目结构
 
 ```
 ochwpro/
-├── model.py          # StrokeTransformer 模型定义
-├── train.py          # 训练脚本 (Lightning)
-├── demo.py           # Tkinter 手写输入演示
-├── dataset.py        # 数据集加载 & 特征提取
-├── char_index.py     # 字符↔标签索引映射
-├── pot_parser.py     # .pot 二进制文件解析器
-├── export_onnx.py    # ONNX 导出 + INT8 量化
-└── quick_test.py     # 快速验证脚本
+├── model.py                # StrokeTransformer 模型定义
+├── train.py                # 单字训练脚本 (Lightning)
+├── demo.py                 # Tkinter 手写输入演示 (单字+叠写)
+├── stroke_segmenter.py     # 叠写切分引擎 (纯 DP)
+├── dataset.py              # 数据集加载 & 特征提取
+├── char_index.py           # 字符↔标签索引映射
+├── pot_parser.py           # .pot 二进制文件解析器
+├── export_onnx.py          # ONNX 导出 + INT8 量化
+└── quick_test.py           # 快速验证脚本
 ```
 
 ## 数据集
