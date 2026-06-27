@@ -1,5 +1,7 @@
 # ochwpro
 
+> 这是为 [Xime 输入法（https://github.com/ximeiorg/Xime）](https://github.com/ximeiorg/Xime) 准备的笔画输入模型。
+
 使用 **Transformer** 编码器对笔画轨迹序列进行实时分类的轻量级手写输入引擎。
 
 基于 CASIA-OLHWDB 数据集训练，支持 **7356** 类汉字单字识别。
