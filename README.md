@@ -4,6 +4,8 @@
 
 基于 CASIA-OLHWDB 数据集训练，支持 **7356** 类汉字单字识别。
 
+![demo video](https://github.com/user-attachments/assets/1eafa234-4f1e-4f0b-8ccc-ccc93843d07e)
+
 ## 模型设计 — StrokeTransformer
 
 ### 整体架构
