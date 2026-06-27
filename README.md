@@ -4,8 +4,6 @@
 
 使用 **Transformer** 编码器对笔画轨迹序列进行实时分类的轻量级手写输入引擎。
 
-基于 CASIA-OLHWDB 数据集训练，支持 **7356** 类汉字单字识别。
-
 
 
 https://github.com/user-attachments/assets/ffd85e55-3170-4bd6-92f5-de0ac6835b3e
