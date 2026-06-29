@@ -1,6 +1,6 @@
 # ochwpro
 
-> 这是为 [Xime 输入法（https://github.com/ximeiorg/Xime）](https://github.com/ximeiorg/Xime) 准备的笔画输入模型。
+> 这是为 [Xime 输入法（https://github.com/ximeiorg/Xime）](https://github.com/ximeiorg/Xime) 准备的手写输入模型。
 
 使用 **Transformer** 编码器对笔画轨迹序列进行实时分类的轻量级手写输入引擎。
 
@@ -50,7 +50,7 @@
 | dim_feedforward | 384 | FFN 隐藏层维度 |
 | dropout | 0.2 | Dropout 比率 |
 | max_seq_len | 512 | 最大轨迹序列长度 |
-| **参数量** | **~2.5M** | 轻量，适合移动端部署 |
+| **参数量** | **~1.72M** | 轻量，适合移动端部署 |
 
 ### 关键设计决策
 
@@ -80,9 +80,9 @@
 
 ### 当前结果
 
-训练 30 个 epoch 后，在 CASIA-OLHWDB 测试集上达到 **88.86%** 的 Top-1 验证精度。
+训练 30 个 epoch 后，在 CASIA-OLHWDB 测试集上达到 **90.46%** 的 Top-1 验证精度。
 
-> 最佳权重: `checkpoints/ochwpro-epoch=28-val_acc=0.8886.ckpt`
+> 最佳权重: `logs/ochwpro/version_0/checkpoints/ochwpro-epoch=28-val_acc=0.9046.ckpt`
 
 ## 使用方法
 
@@ -126,7 +126,7 @@ logs/ochwpro/version_X/
 ├── events.out.tfevents.*        # TensorBoard 事件
 └── checkpoints/
     ├── last.ckpt                         # 最后 epoch
-    ├── ochwpro-epoch=28-val_acc=0.8886.ckpt  # Top-3
+    ├── ochwpro-epoch=28-val_acc=0.9046.ckpt  # Top-3
     └── ochwpro-best.ckpt                 # 最佳权重
 ```
 
@@ -152,7 +152,7 @@ uv run python -m ochwpro.export_onnx --model checkpoints/last.ckpt --seq-len 300
 uv run python -m ochwpro.demo
 
 # 指定模型
-uv run python -m ochwpro.demo --model checkpoints/ochwpro-epoch=28-val_acc=0.8886.ckpt
+uv run python -m ochwpro.demo --model logs/ochwpro/version_0/checkpoints/ochwpro-epoch=28-val_acc=0.9046.ckpt
 
 # ONNX 推理
 uv run python -m ochwpro.demo --model checkpoints/ochwpro-int8.onnx

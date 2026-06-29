@@ -174,7 +174,7 @@ class SegmentEngine:
 
         if path_candidates:
             _, best_segments = path_candidates[0]
-            alt_lists = [seg[:3] if seg else [("?", 0.0)] for seg in best_segments]
+            alt_lists = [seg[:top_k] if seg else [("?", 0.0)] for seg in best_segments]
             max_combo = min(len(alt_lists), 2)
             if max_combo > 0:
                 for combo in product(*alt_lists[:max_combo]):

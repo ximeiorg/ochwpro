@@ -238,6 +238,9 @@ class HandwritingApp:
         # 已确认的文本
         self.confirmed_text = ""
 
+        # 自动清空定时器（2 秒无笔画自动清除）
+        self._auto_clear_after_id: str | None = None
+
         self._build_ui()
 
         # 鼠标事件
@@ -291,18 +294,23 @@ class HandwritingApp:
         ttk.Label(main_f, textvariable=self.main_result,
                   font=('微软雅黑', 28, 'bold'), foreground='#1a73e8').pack(side='left', padx=5)
 
-        # Top-10 候选按钮
+        # Top-10 候选按钮（带概率）
         btn_f = ttk.Frame(self.root)
         btn_f.pack(fill='x', padx=10, pady=(5,5))
         self.candidate_buttons = []
         for i in range(self.top_k):
             btn = tk.Button(
-                btn_f, text='', width=6, font=('微软雅黑', 16),
+                btn_f, text='', width=8, font=('微软雅黑', 14),
                 command=lambda idx=i: self._select_candidate(idx),
                 relief='raised', bd=2,
             )
             btn.pack(side='left', padx=2, fill='y', ipadx=4, ipady=12)
             self.candidate_buttons.append(btn)
+
+        # 键盘快捷键: 数字键 1-0 选择候选
+        for i in range(10):
+            key = str((i + 1) % 10)  # 1-9,0 分别对应索引 0-9
+            self.root.bind(f"<Key-{key}>", lambda e, idx=i: self._select_candidate(idx))
 
         # 状态栏
         self.status_var = tk.StringVar()
@@ -313,7 +321,39 @@ class HandwritingApp:
         """将画布坐标直接用于识别（无需转换）。"""
         return stroke  # 直接使用画布坐标
 
+    def _cancel_auto_clear_timer(self):
+        """取消自动清空定时器."""
+        if self._auto_clear_after_id is not None:
+            self.root.after_cancel(self._auto_clear_after_id)
+            self._auto_clear_after_id = None
+
+    def _start_auto_clear_timer(self):
+        """启动/重置自动清空定时器（2 秒后若无候选且无新笔画则清空画布）.
+
+        只在没有候选等待选择时启动（即已上屏后的空闲状态），
+        避免候选还没选就被清掉。
+        """
+        self._cancel_auto_clear_timer()
+        # 有候选等待选择时不清空
+        if hasattr(self, '_candidates') and self._candidates:
+            return
+        self._auto_clear_after_id = self.root.after(2000, self._clear_strokes_only)
+
+    def _clear_strokes_only(self):
+        """仅清除笔画，保留已上屏文本."""
+        self._cancel_auto_clear_timer()
+        self.canvas.delete('all')
+        self.strokes = []
+        self.current_stroke = []
+        for btn in self.candidate_buttons:
+            btn.config(text='')
+        self._candidates = []
+        if not self.confirmed_text:
+            self.main_result.set("等待书写...")
+        self.status_var.set("")
+
     def _on_mouse_down(self, event):
+        self._cancel_auto_clear_timer()
         self.current_stroke = [(event.x, event.y)]
         self._draw_point(event.x, event.y)
 
@@ -334,8 +374,10 @@ class HandwritingApp:
             self.current_stroke = []
             if self.strokes:
                 self._predict()
+        self._start_auto_clear_timer()
 
     def _on_touch_down(self, event):
+        self._cancel_auto_clear_timer()
         self.current_stroke = [(int(event.x), int(event.y))]
 
     def _on_touch_move(self, event):
@@ -356,6 +398,7 @@ class HandwritingApp:
             self.current_stroke = []
             if self.strokes:
                 self._predict()
+        self._start_auto_clear_timer()
 
     def _toggle_overwrite(self):
         """切换叠写/单字模式."""
@@ -382,7 +425,7 @@ class HandwritingApp:
         best_ch, best_prob = results[0]
         self.main_result.set(f"{best_ch}")
         for i, (ch, prob) in enumerate(results):
-            self.candidate_buttons[i].config(text=f"{i+1}.{ch}")
+            self.candidate_buttons[i].config(text=f"{i+1}.{ch}\n{prob:.1%}")
         total_points = sum(len(s) for s in self.strokes)
         self.status_var.set(
             f"笔画: {len(self.strokes)} | 轨迹点: {total_points} | "
@@ -412,7 +455,7 @@ class HandwritingApp:
             self.main_result.set(full_text)
             for i, (text, prob) in enumerate(candidates):
                 display = text if len(text) <= 6 else text[:5] + "…"
-                self.candidate_buttons[i].config(text=f"{i+1}.{display}")
+                self.candidate_buttons[i].config(text=f"{i+1}.{display}\n{prob:.1%}")
         for i in range(len(candidates), self.top_k):
             self.candidate_buttons[i].config(text='')
 
@@ -451,14 +494,15 @@ class HandwritingApp:
         self.confirmed_text += full_text
         self.main_result.set(self.confirmed_text)
         self.status_var.set(f"已确认: {self.confirmed_text}")
-        self.clear()
+        self._clear_strokes_only()
         self.main_result.set(self.confirmed_text)
 
     def clear(self):
         self.canvas.delete('all')
         self.strokes = []
         self.current_stroke = []
-        self.main_result.set(self.confirmed_text if self.confirmed_text else "等待书写...")
+        self.confirmed_text = ""
+        self.main_result.set("等待书写...")
         for btn in self.candidate_buttons:
             btn.config(text='')
         self._candidates = []
