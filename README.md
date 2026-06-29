@@ -4,9 +4,10 @@
 
 使用 **Transformer** 编码器对笔画轨迹序列进行实时分类的轻量级手写输入引擎。
 
-基于 CASIA-OLHWDB 数据集训练，支持 **7356** 类汉字单字识别。
 
-![demo video](https://github.com/user-attachments/assets/1eafa234-4f1e-4f0b-8ccc-ccc93843d07e)
+
+https://github.com/user-attachments/assets/ffd85e55-3170-4bd6-92f5-de0ac6835b3e
+
 
 ## 模型设计 — StrokeTransformer
 
